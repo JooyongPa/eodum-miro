@@ -10,7 +10,10 @@ html,body{width:100%;height:100%;background:#0a0a0a;overflow:hidden;font-family:
 #wrap{display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;gap:6px;padding:8px;}
 #hud{display:flex;gap:12px;font-size:13px;color:#666;width:100%;max-width:560px;justify-content:space-between;align-items:center;flex-wrap:wrap;}
 .hval{font-size:15px;font-weight:700;color:#eee;}
-#hearts{font-size:18px;letter-spacing:2px;}
+#timer-bar-wrap{width:100%;max-width:560px;display:flex;align-items:center;gap:8px;font-size:11px;color:#555;}
+#timer-bar-bg{flex:1;height:6px;background:#1a1a1a;border-radius:3px;overflow:hidden;}
+#timer-bar{height:6px;border-radius:3px;background:#2a9;transition:width 0.1s linear,background 0.3s;}
+#timer-label{min-width:36px;text-align:right;font-size:12px;font-weight:700;color:#eee;}
 #hint-row{display:flex;gap:6px;align-items:center;font-size:12px;color:#555;width:100%;max-width:560px;}
 .pip{width:11px;height:11px;border-radius:50%;background:#2a9;display:inline-block;margin-right:2px;}
 .pip.off{background:#222;}
@@ -44,9 +47,13 @@ input.name-in:focus{border-color:#f0c030;}
 <div id="wrap">
   <div id="hud">
     <div>레벨 <span class="hval" id="hl">1</span></div>
-    <div id="hearts">❤️❤️❤️</div>
-    <div>시간 <span class="hval" id="ht">0.0s</span></div>
     <div>점수 <span class="hval" id="hscore">0</span></div>
+    <div id="kst-hud"></div>
+  </div>
+  <div id="timer-bar-wrap">
+    <span>⏱</span>
+    <div id="timer-bar-bg"><div id="timer-bar"></div></div>
+    <span id="timer-label">90s</span>
   </div>
   <div id="hint-row">
     <span>💡힌트(H):</span><span id="pips"></span>
@@ -57,8 +64,8 @@ input.name-in:focus{border-color:#f0c030;}
     <canvas id="flash"></canvas>
     <div id="ov">
       <div class="game-title">🔦 어둠의 미로</div>
-      <div class="sub">WASD / 방향키 이동 &nbsp;|&nbsp; H키 힌트 사용<br>👾 적에게 닿으면 ❤️ 감소 — 모두 잃으면 게임 오버!</div>
-      <div class="notice">⚔️ 레벨 3부터 적 등장 &nbsp;|&nbsp; 🗝️ 레벨 10부터 열쇠 필요</div>
+      <div class="sub">WASD / 방향키 이동 &nbsp;|&nbsp; H키 힌트 사용<br>⏱ 제한 시간 안에 출구를 찾아라!</div>
+      <div class="notice">레벨 올라갈수록 시야 좁아지고 시간도 줄어요<br>🗝️ 레벨 10부터 열쇠 수집 후 출구 개방!</div>
       <input class="name-in" id="nameIn" placeholder="이름 입력 (최대 20자)" maxlength="20"/>
       <button class="btn" id="sb">시작하기</button>
       <button class="btn2" id="rkBtn">🏆 글로벌 랭킹 보기</button>
@@ -122,9 +129,16 @@ let cols,rows,maze,px,py,ex,ey;
 let level=1,running=false,startTime=0,raf=null;
 let hints=0,hintActive=false,hintEnd=0,flashStartTime=0;
 let needKey=false,keyX,keyY,hasKey=false;
-let hearts=3,maxHearts=3,invincible=false,invEnd=0;
-let enemies=[],lastEnemyMove=0,ENEMY_INTERVAL=600;
 let playerName='플레이어',sessionScore=0,maxLevel=1;
+let timeLimit=90, timePct=1;
+
+// 레벨별 제한 시간: 레벨 올라갈수록 짧아지고 미로 크기도 반영
+function getTimeLimit(lvl){
+  const mazeSize=9+(lvl-1)*2; // 미로 셀 수
+  const base=90-(lvl-1)*4;    // 레벨1=90s, 레벨10=54s
+  const sizeBonus=mazeSize*0.8; // 미로 클수록 조금 더 줌
+  return Math.max(25, Math.round(base+sizeBonus*0.5));
+}
 
 function mkMaze(w,h){
   const m=Array.from({length:h},()=>Array(w).fill(1));
@@ -148,84 +162,36 @@ function randEmpty(excl){
   return c[Math.floor(Math.random()*c.length)];
 }
 
-function enemyCount(){
-  if(level<3)return 0;
-  return Math.min(Math.floor((level-1)/2),6);
-}
-
-function spawnEnemies(){
-  enemies=[];
-  const n=enemyCount();
-  const excl=[[1,1],[ex,ey],maze._hint||[],needKey?[keyX,keyY]:[]];
-  for(let i=0;i<n;i++){
-    const pos=randEmpty([...excl,...enemies.map(e=>[e.x,e.y])]);
-    if(pos)enemies.push({x:pos[0],y:pos[1]});
-  }
-}
-
-function bfsNext(sx,sy,tx,ty){
-  const visited=new Uint8Array(cols*rows);
-  const q=[[sx,sy,-1,-1]];
-  visited[sy*cols+sx]=1;
-  while(q.length){
-    const[cx_,cy_,fx_,fy_]=q.shift();
-    if(cx_===tx&&cy_===ty)return fx_===-1?null:[fx_,fy_];
-    for(const[dx,dy]of[[0,-1],[0,1],[-1,0],[1,0]]){
-      const nx=cx_+dx,ny=cy_+dy;
-      if(nx>=0&&ny>=0&&nx<cols&&ny<rows&&maze[ny][nx]===0&&!visited[ny*cols+nx]){
-        visited[ny*cols+nx]=1;
-        q.push([nx,ny,fx_===-1?nx:fx_,fy_===-1?ny:fy_]);
-      }
-    }
-  }
-  return null;
-}
-
-function moveEnemies(){
-  const chaseProb=Math.min(0.3+level*0.07,0.88);
-  for(const e of enemies){
-    if(Math.random()<chaseProb){
-      const next=bfsNext(e.x,e.y,px,py);
-      if(next){e.x=next[0];e.y=next[1];continue;}
-    }
-    const dirs=[[0,-1],[0,1],[-1,0],[1,0]].sort(()=>Math.random()-0.5);
-    for(const[dx,dy]of dirs){
-      const nx=e.x+dx,ny=e.y+dy;
-      if(nx>=0&&ny>=0&&nx<cols&&ny<rows&&maze[ny][nx]===0){e.x=nx;e.y=ny;break;}
-    }
-  }
-}
-
-function checkCollision(now){
-  if(invincible&&now<invEnd)return;
-  for(const e of enemies){
-    if(e.x===px&&e.y===py){
-      hearts--;updateHearts();
-      invincible=true;invEnd=now+1500;
-      if(hearts<=0){gameOver();return;}
-      return;
-    }
-  }
-}
-
-function updateHearts(){
-  document.getElementById('hearts').textContent=
-    '❤️'.repeat(Math.max(0,hearts))+'🖤'.repeat(Math.max(0,maxHearts-hearts));
-}
-
 function fitCanvas(){
   const maxW=Math.min(window.innerWidth-20,560);
-  const maxH=Math.min(window.innerHeight-160,560);
+  const maxH=Math.min(window.innerHeight-180,560);
   const size=Math.min(maxW,maxH);
   cv.style.width=fc.style.width=size+'px';
   cv.style.height=fc.style.height=size+'px';
 }
 
 function vr(extra){return Math.max(2.5,5.5-(level-1)*0.28)+(extra?2.6:0);}
+
 function updatePips(){
   document.getElementById('pips').innerHTML=
     Array.from({length:3},(_,i)=>`<span class="pip${i<hints?'':' off'}"></span>`).join('');
 }
+
+function updateTimerBar(elapsed){
+  const remain=Math.max(0,timeLimit-elapsed);
+  timePct=remain/timeLimit;
+  const bar=document.getElementById('timer-bar');
+  const label=document.getElementById('timer-label');
+  bar.style.width=(timePct*100)+'%';
+  // 색상: 넉넉=초록, 절반=노랑, 위험=빨강
+  if(timePct>0.5)bar.style.background='#2a9';
+  else if(timePct>0.25)bar.style.background='#f0c030';
+  else bar.style.background='#c44';
+  label.textContent=Math.ceil(remain)+'s';
+  label.style.color=timePct<=0.25?'#c44':timePct<=0.5?'#f0c030':'#eee';
+  if(remain<=0&&running)timeOver();
+}
+
 function triggerFlash(){flashStartTime=performance.now();}
 function drawFlash(now){
   fc.width=cv.width;fc.height=cv.height;
@@ -251,18 +217,17 @@ function startLevel(lvl){
   px=1;py=1;ex=cols-2;ey=rows-2;
   maze._hint=randEmpty([[1,1],[cols-2,rows-2]]);
   needKey=(lvl>=10);hasKey=false;
+  timeLimit=getTimeLimit(lvl);
   if(needKey){
     const kp=randEmpty([[1,1],[cols-2,rows-2],maze._hint||[]]);
     keyX=kp[0];keyY=kp[1];
     document.getElementById('kst').textContent='🗝️ 열쇠를 찾아라!';
   }else document.getElementById('kst').textContent='';
-  spawnEnemies();
-  hintActive=false;hintEnd=0;invincible=false;invEnd=0;lastEnemyMove=0;
-  ENEMY_INTERVAL=Math.max(260,600-level*22);
+  hintActive=false;hintEnd=0;
   startTime=performance.now();running=true;
   document.getElementById('hl').textContent=lvl;
   document.getElementById('ov').style.display='none';
-  updatePips();updateHearts();
+  updatePips();
   if(raf)cancelAnimationFrame(raf);
   loop();
 }
@@ -286,6 +251,7 @@ function draw(now){
     }
   }
 
+  // 힌트 아이템
   const hp=maze._hint;
   if(hp){
     const hd=Math.sqrt((hp[0]-px)**2+(hp[1]-py)**2);
@@ -298,6 +264,7 @@ function draw(now){
     }
   }
 
+  // 열쇠
   if(needKey&&!hasKey){
     const kd=Math.sqrt((keyX-px)**2+(keyY-py)**2);
     if(kd<=v+0.5){
@@ -309,6 +276,7 @@ function draw(now){
     }
   }
 
+  // 출구
   const ed=Math.sqrt((ex-px)**2+(ey-py)**2);
   if(ed<=v+0.5){
     const eb=Math.max(0,1-ed/v),pulse=0.55+0.45*Math.sin(now/200);
@@ -320,44 +288,38 @@ function draw(now){
     cx.fillText(locked?'🔒':'★',ex*CELL+CELL/2,ey*CELL+CELL/2);
   }
 
-  for(const e of enemies){
-    const ecd=Math.sqrt((e.x-px)**2+(e.y-py)**2);
-    if(ecd>v+1.5)continue;
-    const eb2=Math.max(0,1-ecd/v),pulse=0.7+0.3*Math.sin(now/180+e.x);
-    cx.fillStyle=`rgba(200,40,40,${eb2*pulse*0.65})`;
-    cx.fillRect(e.x*CELL+2,e.y*CELL+2,CELL-4,CELL-4);
-    cx.font=`${CELL-6}px serif`;cx.textAlign='center';cx.textBaseline='middle';
-    cx.globalAlpha=eb2*pulse;
-    cx.fillText('👾',e.x*CELL+CELL/2,e.y*CELL+CELL/2);
-    cx.globalAlpha=1;
+  // 시간 얼마 안 남으면 화면 붉게 깜빡
+  if(timePct<=0.25){
+    const flicker=0.08+0.08*Math.sin(now/120);
+    cx.fillStyle=`rgba(180,0,0,${flicker})`;
+    cx.fillRect(0,0,cv.width,cv.height);
   }
 
+  // 횃불
   const tg=cx.createRadialGradient(pcx,pcy,0,pcx,pcy,v*CELL);
   tg.addColorStop(0,'rgba(255,200,80,0.10)');tg.addColorStop(1,'rgba(0,0,0,0)');
   cx.fillStyle=tg;cx.fillRect(0,0,cv.width,cv.height);
 
-  const showP=!invincible||(Math.floor(now/100)%2===0);
-  if(showP){
-    cx.fillStyle=invincible?'rgba(255,120,120,0.85)':'#ddeeff';
-    cx.beginPath();cx.arc(pcx,pcy,CELL*0.28,0,Math.PI*2);cx.fill();
-  }
+  // 플레이어
+  cx.fillStyle='#ddeeff';
+  cx.beginPath();cx.arc(pcx,pcy,CELL*0.28,0,Math.PI*2);cx.fill();
 
+  // 힌트 타이머
   if(active){
     const rem=Math.max(0,(hintEnd-now)/1000).toFixed(1);
     cx.fillStyle='rgba(120,220,255,0.9)';
     cx.font='bold 12px monospace';cx.textAlign='left';cx.textBaseline='top';
     cx.fillText(`💡 ${rem}s`,5,5);
   }
+
   drawFlash(now);
 }
 
 function loop(){
   if(!running)return;
   const now=performance.now();
-  document.getElementById('ht').textContent=((now-startTime)/1000).toFixed(1)+'s';
-  if(now-lastEnemyMove>ENEMY_INTERVAL){
-    moveEnemies();checkCollision(now);lastEnemyMove=now;
-  }
+  const elapsed=(now-startTime)/1000;
+  updateTimerBar(elapsed);
   draw(now);
   raf=requestAnimationFrame(loop);
 }
@@ -369,15 +331,16 @@ function useHint(){
   triggerFlash();
 }
 
-function calcScore(lvl,sec){return Math.max(0,1000-Math.floor(sec*10))+lvl*50+(hearts*100);}
+function calcScore(lvl,remain){
+  // 남은 시간 많을수록 보너스
+  return Math.floor(remain*10)+lvl*100;
+}
 
 function move(dx,dy){
   if(!running)return;
   const nx=px+dx,ny=py+dy;
   if(nx<0||ny<0||nx>=cols||ny>=rows||maze[ny][nx]===1)return;
   px=nx;py=ny;
-  checkCollision(performance.now());
-  if(!running)return;
   const hp=maze._hint;
   if(hp&&px===hp[0]&&py===hp[1]&&hints<3){hints=Math.min(3,hints+1);maze._hint=null;updatePips();}
   if(needKey&&!hasKey&&px===keyX&&py===keyY){hasKey=true;document.getElementById('kst').textContent='🔓 출구 개방!';}
@@ -388,14 +351,15 @@ function showOv(html){const ov=document.getElementById('ov');ov.innerHTML=html;o
 
 function levelClear(){
   running=false;
-  const sec=(performance.now()-startTime)/1000;
-  const sc=calcScore(level,sec);
+  const elapsed=(performance.now()-startTime)/1000;
+  const remain=Math.max(0,timeLimit-elapsed);
+  const sc=calcScore(level,remain);
   sessionScore+=sc;
   document.getElementById('hscore').textContent=sessionScore;
   showOv(`
     <div style="font-size:22px;">✅ 탈출 성공!</div>
     <div style="color:#f0c030;font-size:16px;">+${sc}점 &nbsp;|&nbsp; 누적 ${sessionScore}점</div>
-    <div style="font-size:12px;color:#555;">기록: ${sec.toFixed(1)}s &nbsp; 레벨 ${level} 클리어! &nbsp; ❤️×${hearts}</div>
+    <div style="font-size:12px;color:#555;">남은 시간: ${remain.toFixed(1)}s &nbsp; 레벨 ${level} 클리어!</div>
     <div style="display:flex;gap:10px;margin-top:8px;">
       <button class="btn" id="nb">레벨 ${level+1} →</button>
       <button class="btn2" id="rb">다시하기</button>
@@ -403,25 +367,25 @@ function levelClear(){
     <button class="btn2" id="qb" style="margin-top:4px;">🏆 기록 저장 &amp; 종료</button>
   `);
   document.getElementById('nb').onclick=()=>startLevel(level+1);
-  document.getElementById('rb').onclick=()=>{hearts=maxHearts;startLevel(level);};
+  document.getElementById('rb').onclick=()=>startLevel(level);
   document.getElementById('qb').onclick=endGame;
 }
 
-function gameOver(){
+function timeOver(){
   running=false;
   if(raf){cancelAnimationFrame(raf);raf=null;}
   showOv(`
-    <div style="font-size:32px;">💀</div>
-    <div style="font-size:22px;color:#c44;">게임 오버</div>
-    <div style="font-size:13px;color:#666;">레벨 ${level}에서 쓰러졌습니다</div>
+    <div style="font-size:32px;">⏰</div>
+    <div style="font-size:22px;color:#c44;">시간 초과!</div>
+    <div style="font-size:13px;color:#666;">레벨 ${level}에서 시간이 다 됐어요</div>
     <div style="font-size:15px;color:#ccc;margin-top:4px;">누적 점수: <span style="color:#f0c030;">${sessionScore}점</span></div>
     <div style="display:flex;gap:10px;margin-top:10px;">
-      <button class="btn" id="gb-retry">이 레벨 다시</button>
-      <button class="btn2" id="gb-save">🏆 저장 &amp; 종료</button>
+      <button class="btn" id="to-retry">이 레벨 다시</button>
+      <button class="btn2" id="to-save">🏆 저장 &amp; 종료</button>
     </div>
   `);
-  document.getElementById('gb-retry').onclick=()=>{hearts=maxHearts;startLevel(level);};
-  document.getElementById('gb-save').onclick=endGame;
+  document.getElementById('to-retry').onclick=()=>startLevel(level);
+  document.getElementById('to-save').onclick=endGame;
 }
 
 async function endGame(){
@@ -440,19 +404,19 @@ async function endGame(){
 }
 
 function resetToStart(){
-  sessionScore=0;maxLevel=1;hearts=maxHearts;hints=1;updatePips();updateHearts();
+  sessionScore=0;maxLevel=1;hints=1;updatePips();
   document.getElementById('rk-panel').style.display='none';
   showOv(`
     <div class="game-title">🔦 어둠의 미로</div>
-    <div class="sub">WASD / 방향키 이동 &nbsp;|&nbsp; H키 힌트<br>👾 적에게 닿으면 ❤️ 감소 — 모두 잃으면 게임 오버!</div>
-    <div class="notice">⚔️ 레벨 3부터 적 등장 &nbsp;|&nbsp; 🗝️ 레벨 10부터 열쇠 필요</div>
+    <div class="sub">WASD / 방향키 이동 &nbsp;|&nbsp; H키 힌트<br>⏱ 제한 시간 안에 출구를 찾아라!</div>
+    <div class="notice">레벨 올라갈수록 시야 좁아지고 시간도 줄어요<br>🗝️ 레벨 10부터 열쇠 수집 후 출구 개방!</div>
     <input class="name-in" id="nameIn2" placeholder="이름 입력 (최대 20자)" maxlength="20" value="${playerName}"/>
     <button class="btn" id="sb2">시작하기</button>
     <button class="btn2" id="rkBtn2">🏆 글로벌 랭킹 보기</button>
   `);
   document.getElementById('sb2').onclick=()=>{
     playerName=document.getElementById('nameIn2').value.trim()||'플레이어';
-    hearts=maxHearts;hints=1;updatePips();startLevel(1);
+    hints=1;updatePips();startLevel(1);
   };
   document.getElementById('rkBtn2').onclick=async()=>{
     const rp=document.getElementById('rk-panel');
@@ -463,7 +427,7 @@ function resetToStart(){
 
 document.getElementById('sb').onclick=()=>{
   playerName=document.getElementById('nameIn').value.trim()||'플레이어';
-  sessionScore=0;maxLevel=1;hearts=maxHearts;hints=1;updatePips();startLevel(1);
+  sessionScore=0;maxLevel=1;hints=1;updatePips();startLevel(1);
 };
 document.getElementById('rkBtn').onclick=async()=>{
   const rp=document.getElementById('rk-panel');
